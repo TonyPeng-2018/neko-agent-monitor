@@ -96,7 +96,11 @@ def _load(path: Path) -> dict:
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        shutil.copy2(path, str(path) + BACKUP_SUFFIX)
+        # Keep the user's pristine file: never overwrite an existing backup with
+        # a version that already contains neko's hooks (e.g. on uninstall).
+        bak = Path(str(path) + BACKUP_SUFFIX)
+        if not bak.exists() or not _status(path):
+            shutil.copy2(path, bak)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

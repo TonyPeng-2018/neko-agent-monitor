@@ -128,14 +128,38 @@ class Hub:
         from .demo import tiny_persona
         return tiny_persona(seed, parent=parent, taken_hues=taken)
 
+    def _name_list(self) -> list:
+        names = getattr(self.persona_mod, "NAMES", None) if self.persona_mod is not None else None
+        if not names:
+            from .demo import _NAMES as names
+        return list(names)
+
+    def _unique_name(self, persona: dict, used: set) -> dict:
+        """Two live agents must never share a name (identical prompts give
+        identical personas): deterministically take the next free name."""
+        name = persona.get("name") or ""
+        if name not in used:
+            return persona
+        names = self._name_list()
+        start = names.index(name) if name in names else 0
+        for i in range(1, len(names) + 1):
+            cand = names[(start + i) % len(names)]
+            if cand not in used:
+                return dict(persona, name=cand)
+        n = 2
+        while f"{name} {n}" in used:
+            n += 1
+        return dict(persona, name=f"{name} {n}")
+
     def attach_personas(self, agents: list) -> None:
         from .demo import hue_of
         live = {a.id for a in agents}
         # forget personas of agents that are gone
         for k in [k for k in self._persona_cache if k not in live]:
             del self._persona_cache[k]
-        # parents first so kittens can inherit
-        order = sorted(agents, key=lambda a: 1 if a.parent_id else 0)
+        # parents first so kittens can inherit; then oldest first so an existing
+        # character keeps its name and a newcomer is the one that gets renamed
+        order = sorted(agents, key=lambda a: (1 if a.parent_id else 0, a.started_at or 0, a.id))
         by_id = {a.id: a for a in agents}
         for a in order:
             if a.persona:
@@ -151,6 +175,8 @@ class Hub:
             if cached and cached[0] == seed:
                 a.persona = cached[1]
                 continue
+            used = {p.get("name") for k, (_s, p) in self._persona_cache.items()
+                    if k != a.id and k in live and isinstance(p, dict)}
             taken = []
             for k, (_s, p) in self._persona_cache.items():
                 if k != a.id and isinstance(p, dict):
@@ -158,7 +184,7 @@ class Hub:
                     h = h if isinstance(h, (int, float)) else hue_of(p.get("fur", ""))
                     if h is not None:
                         taken.append(round(h, 1))
-            a.persona = self._persona_for(seed, parent_persona, taken)
+            a.persona = self._unique_name(self._persona_for(seed, parent_persona, taken), used)
             self._persona_cache[a.id] = (seed, a.persona)
 
     # -- collection
@@ -482,7 +508,11 @@ def make_server(host: str | None = None, port: int | None = None, demo: bool = F
         h = "127.0.0.1"
     hub = Hub(demo=demo, poll=poll)
     handler = type("NekoHandler", (Handler,), {"hub": hub, "web_root": web_root or config.web_dir()})
-    srv = NekoServer((h, config.port() if port is None else port), handler)
+    cls = NekoServer
+    if ":" in h:  # "::1"
+        import socket
+        cls = type("NekoServer6", (NekoServer,), {"address_family": socket.AF_INET6})
+    srv = cls((h, config.port() if port is None else port), handler)
     return srv, hub
 
 

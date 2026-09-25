@@ -254,6 +254,8 @@ def test_hooks_install_uninstall_preserves_and_idempotent(tmp_path):
 
     assert hooks.uninstall()["claude"][1] is True
     assert json.loads(settings.read_text()) == FOREIGN
+    # the backup still holds the user's original file, not the neko-hooked one
+    assert json.loads((tmp_path / "claude" / "settings.json.neko-bak").read_text()) == FOREIGN
     assert hooks.uninstall()["claude"][1] is False
     assert hooks.status()["claude"][1] == []
 
@@ -311,3 +313,23 @@ def test_launchd_install_writes_plist(tmp_path):
     assert d["KeepAlive"] and d["RunAtLoad"]
     assert d["EnvironmentVariables"]["NEKO_PORT"] == "8799"
     assert cli.main(["uninstall"]) == 0 and not p.exists()
+
+
+def test_identical_prompts_get_distinct_names():
+    from neko.model import Agent
+    from neko.server import Hub
+    hub = Hub(demo=True)
+    mk = lambda i: Agent(id=f"claude:s{i}", source="claude", creation_prompt="same task",
+                         started_at=100 + i)
+    agents = [mk(2), mk(1), mk(3)]
+    hub.attach_personas(agents)
+    names = [a.persona["name"] for a in sorted(agents, key=lambda a: a.id)]
+    assert len(set(names)) == 3
+    # stable across polls; the oldest keeps the "natural" name
+    again = [mk(3), mk(1), mk(2)]
+    hub.attach_personas(again)
+    assert [a.persona["name"] for a in sorted(again, key=lambda a: a.id)] == names
+    solo = Hub(demo=True)
+    one = [mk(1)]
+    solo.attach_personas(one)
+    assert names[0] == one[0].persona["name"]

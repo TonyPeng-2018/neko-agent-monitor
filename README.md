@@ -211,6 +211,16 @@ to catch the mouse. The menu-bar cat offers **Show room**, **Show/Hide
 overlay** and **Quit**. If the daemon isn't up yet, the overlay retries every
 3 s. Set `NEKO_PORT` if you changed the port.
 
+**Pick them up!** Press on a character and drag: it dangles from your pointer
+(legs kicking, sparkly eyes), and when you let go it drops back to the ground,
+lands with a squish and carries on from there. In the room view it slides over
+the island floor instead (the camera doesn't orbit while you hold a cat).
+A short click still gives a hop and a heart.
+
+`neko install --overlay` also starts the overlay at login (a second LaunchAgent,
+`com.neko-agent-monitor.overlay`); **Quit** from the menu-bar cat keeps it closed
+until the next login. `neko uninstall` removes both.
+
 ## Background service (launchd)
 
 `neko install` writes `~/Library/LaunchAgents/com.neko-agent-monitor.plist`
@@ -232,7 +242,8 @@ Environment overrides: `NEKO_PORT`, `NEKO_HOME` (default `~/.neko`),
 - **外观来自提示词**：用创建它的提示词做语义向量（model2vec 多语言模型，中英文对齐），决定物种、帽子、毛色、花纹、衣服、表情、道具和名字。同一个提示词永远是同一只；同时在场的两只不会重名。
 - **监控数据拟人化**：上下文越满体型越大（超过 80% 会冒汗）；最近 10 分钟花的钱变成头顶的金币，烧钱太快会冒蒸汽；需要你确认权限时会跳着挥手、冒出 “!”；出错或卡在循环里会转圈圈眼；长时间空闲会蜷起来睡觉（Zzz）；完成后撒花、挥手离场；子 Agent 是跟在后面的小猫崽；待办进度是脚下的小圆环。
 - **安装**：`./scripts/install.sh`（创建 .venv、`pip install -e '.[embed]'`、下载模型、安装 launchd 后台服务，开机自启）。然后打开 http://127.0.0.1:8765/ 。先看效果：`python3 -m neko serve --demo --open`
-- **桌面悬浮层**：`cd overlay && npm install && npm start`（透明、鼠标穿透、始终置顶，小动物在屏幕底部走来走去）
+- **桌面悬浮层**：`cd overlay && npm install && npm start`（透明、鼠标穿透、始终置顶，小动物在屏幕底部走来走去）；`neko install --overlay` 开机自动启动
+- **可以拖动**：按住小动物拖走，它会被拎起来蹬腿、星星眼，松手后掉回地面“啪叽”落地，再从新位置继续活动；轻点一下会跳一下、冒爱心
 - **Hooks（可选）**：`neko hooks install`，状态变化即时显示；修改前会先备份 `settings.json`，卸载只删除 neko 自己的条目
 - **隐私**：完全本地运行，网页也不访问外网。提示词只在本机读取，不会写入磁盘；持久化的只有提示词的哈希和外观特征
 - **轻量**：后台守护进程约 50 MB 内存、CPU 基本为 0；嵌入模型只在有新 Agent 出现时临时加载，空闲 90 秒后自动退出

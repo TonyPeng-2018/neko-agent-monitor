@@ -368,6 +368,8 @@ export class Critter {
       default: e = { eyes: P.eyes, mouth: P.mouth };
     }
     if (this.poke > 0 && st !== 'sleeping' && st !== 'error') e = { eyes: 'happy', mouth: 'open' };
+    if (this.drag) e = { eyes: 'sparkle', mouth: 'o' };            // wheee~ picked up
+    else if (this.landT > 0) e = { eyes: 'happy', mouth: 'smile' }; // safe landing
     if (this.blinkT > 0 && !['closed', 'happy', 'spiral'].includes(e.eyes)) e.eyes = 'closed';
     e.blush = P.blush || st === 'waiting' || this.hover > 0.5;
     return e;
@@ -401,12 +403,17 @@ export class Critter {
     if (this.state === 'done' || this.leaving) this.doneT += dt;
     if (this.state === 'done' && !this.leaving && this.doneT > 2.8) this.depart();
 
+    // drag & drop: held under the pointer, then fall back to the ground and land
+    const held = this.dragUpdate(dt, world);
+
     // locomotion
     let moving = false;
     const speed = 0.55 * P.speed * Math.sqrt(this.baseScale()) * (this.leaving ? 1.5 : 1);
     let desiredYaw = null;
     const parent = this.parentId ? world.critters.get(this.parentId) : null;
-    if (this.leaving) {
+    if (held) {
+      // carried around — no walking
+    } else if (this.leaving) {
       this.leaveT += dt;
       if (this.state !== 'done' || this.doneT > 2.8) {
         _v.subVectors(this.exit, this.pos);
@@ -489,6 +496,9 @@ export class Critter {
       for (const k of POSE_KEYS) pose[k] += tmp[k] * w;
     }
 
+    if (this.drag || this.airY > 0) this.poseHeld(pose, t);
+    if (this.landT > 0) pose.sq -= Math.sin((this.landT / 0.4) * Math.PI) * 0.22;
+
     // blink / ear twitch timers
     this.blinkIn -= dt;
     if (this.blinkT > 0) this.blinkT -= dt;
@@ -519,8 +529,10 @@ export class Critter {
     sc *= 1 + this.hover * 0.06;
     r.scaler.scale.setScalar(sc);
 
-    world.clampInside(this.pos, this, true);
+    if (!this.drag) world.clampInside(this.pos, this, true);
     this.root.position.copy(this.pos);
+    this.root.position.y += this.airY;
+    this.root.rotation.z = this.swing;
     this.root.rotation.y = this.yaw;
     r.facing.rotation.y = pose.yawAdd;
 
@@ -624,6 +636,77 @@ export class Critter {
       this.confettied = true;
       fx.confetti(this.pos, Math.max(0.6, sc));
     }
+  }
+
+  // ------------------------------------------------------------ drag & drop
+  /** Pick up: `pt` is where the pointer is in world space (updated by moveDrag). */
+  grab(pt) {
+    this.drag = pt.clone();
+    this.dragPrev = this.pos.clone();
+    this.target = null;
+    this.shuffle = null;
+    this.useTimer = 0;
+  }
+
+  moveDrag(pt) {
+    if (this.drag) this.drag.copy(pt);
+  }
+
+  release() {
+    if (!this.drag) return;
+    this.drag = null;
+    this.vy = 0;
+    this.target = null; // wander again from wherever it was put down
+  }
+
+  /** @returns true while the critter is held or still falling. */
+  dragUpdate(dt, world) {
+    if (!this.airY) this.airY = 0;
+    if (!this.swing) this.swing = 0;
+    if (this.landT > 0) this.landT -= dt;
+    if (this.drag) {
+      const k = damp(18, dt);
+      const px = this.pos.x;
+      this.pos.x += (this.drag.x - this.pos.x) * k;
+      if (world.mode === 'overlay') {
+        this.airY += (Math.max(0, this.drag.y) - this.airY) * k;
+      } else {
+        this.pos.z += (this.drag.z - this.pos.z) * k;
+        this.airY += (0.55 * Math.sqrt(this.baseScale()) - this.airY) * k; // lifted off the floor
+      }
+      // pendulum: lean against the direction of travel
+      const vx = (this.pos.x - px) / Math.max(dt, 1e-3);
+      this.swing += (clamp(-vx * 0.08, -0.6, 0.6) - this.swing) * damp(8, dt);
+      return true;
+    }
+    this.swing += (0 - this.swing) * damp(6, dt);
+    if (this.airY > 0) {
+      this.vy = (this.vy || 0) - 14 * dt;
+      this.airY += this.vy * dt;
+      if (this.airY <= 0) {
+        this.airY = 0;
+        this.landT = 0.4;
+        this.world.fx.puff(this.pos, Math.sqrt(this.baseScale()));
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** Dangling pose: legs kick, arms up, tail wags — layered over the blended pose. */
+  poseHeld(p, t) {
+    const kick = Math.sin(t * 16);
+    p.sit = 0;
+    p.by = 0;
+    p.lL = kick * 0.5;
+    p.lR = -kick * 0.5;
+    p.aLf = 0.4 + Math.sin(t * 11) * 0.3;
+    p.aRf = 0.4 - Math.sin(t * 11) * 0.3;
+    p.aLz = 1.2;
+    p.aRz = 1.2;
+    p.tail = Math.sin(t * 9) * 0.7;
+    p.ear = 0.6;
+    p.hNod = -0.15;
   }
 
   pokeIt() {

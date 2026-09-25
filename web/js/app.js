@@ -391,9 +391,57 @@ function pick(x, y) {
 /** For the Electron overlay: is there a cat under this screen point? */
 window.nekoHitTest = (x, y) => !!pick(x, y);
 
+// ------------------------------------------------------------------ drag & drop
+// Press on a character and move: it is lifted (room: slides over the floor;
+// overlay: follows the pointer anywhere, then drops back to the ground strip).
+let dragging = null;        // the critter being carried
+const grabOff = new THREE.Vector3();
+const _dp = new THREE.Vector3();
+
+function dragPoint(x, y, out) {
+  ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster.ray.intersectPlane(OVERLAY ? facePlane : floorPlane, out);
+}
+
+function startDrag(c, e) {
+  if (!dragPoint(e.clientX, e.clientY, _dp)) return;
+  dragging = c;
+  grabOff.copy(c.pos).sub(_dp);
+  // overlay: hang below the pointer, held by the scruff; room: keep the grab offset on the floor
+  grabOff.y = OVERLAY ? -0.9 * c.baseScale() : 0;
+  c.grab(dragTarget(_dp));
+  if (controls) controls.enabled = false;
+  document.body.style.cursor = 'grabbing';
+  canvas.setPointerCapture?.(e.pointerId);
+  window.neko?.setHover?.((lastHover = true)); // keep the overlay window catching the mouse
+  if (OVERLAY) hud.showHoverCard(null);
+}
+
+function dragTarget(pt) {
+  pt.add(grabOff);
+  world.clampInside(pt, dragging); // stay on the island / on screen
+  return pt;
+}
+
+function endDrag() {
+  if (!dragging) return;
+  dragging.release();
+  dragging = null;
+  if (controls) controls.enabled = true;
+  document.body.style.cursor = '';
+}
+
 let lastHover = false;
 addEventListener('pointermove', (e) => {
   mouseXY = [e.clientX, e.clientY];
+  if (downAt && !dragging && downCritter && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) {
+    startDrag(downCritter, e);
+  }
+  if (dragging) {
+    if (dragPoint(e.clientX, e.clientY, _dp)) dragging.moveDrag(dragTarget(_dp));
+    return;
+  }
   const c = e.target === canvas ? pick(e.clientX, e.clientY) : null;
   world.hoverId = c ? c.id : null;
   document.body.style.cursor = c ? 'pointer' : '';
@@ -413,9 +461,20 @@ addEventListener('pointerleave', () => {
 });
 
 let downAt = null;
-canvas.addEventListener('pointerdown', (e) => (downAt = [e.clientX, e.clientY]));
+let downCritter = null;
+canvas.addEventListener('pointerdown', (e) => {
+  downAt = [e.clientX, e.clientY];
+  downCritter = e.button === 0 ? pick(e.clientX, e.clientY) : null;
+  if (downCritter && controls) controls.enabled = false; // don't orbit when grabbing a cat
+});
+addEventListener('pointercancel', () => ((downAt = downCritter = null), endDrag()));
 canvas.addEventListener('pointerup', (e) => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  const wasDrag = !!dragging;
+  endDrag();
+  downCritter = null;
+  if (controls) controls.enabled = true;
+  if (wasDrag || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return (downAt = null);
+  downAt = null;
   const c = pick(e.clientX, e.clientY);
   if (OVERLAY) {
     if (c) {

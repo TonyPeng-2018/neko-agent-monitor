@@ -5,7 +5,7 @@
   --pink: #ff8fb8;
   --line: #f1dde6;
   --shadow: 0 10px 30px rgba(170, 110, 140, 0.18), 0 2px 6px rgba(170, 110, 140, 0.12);
-  --font: 'M PLUS Rounded 1c', 'Nunito', ui-rounded, system-ui, sans-serif;
+  --font: ui-rounded, 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', 'M PLUS Rounded 1c', 'Nunito', system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
@@ -134,7 +134,7 @@ html.overlay, html.overlay body { background: transparent !important; }
 .cwd { margin-top: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--ink-soft); word-break: break-all; }
 
 /* ---------- overlay mode: no chrome, only cats (+ hover card) */
-body.overlay .panel { display: none; }
+body.overlay .panel, body.gallery .panel { display: none; }
 body.overlay .tag { font-size: 12px; }
 
 @media (max-width: 720px) {

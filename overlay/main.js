@@ -77,7 +77,20 @@ function createWindow() {
   });
   win.webContents.on('did-finish-load', () => {
     if (!win.isVisible()) win.showInactive();
+    // dev aid: NEKO_OVERLAY_SHOT=/path.png [NEKO_OVERLAY_SHOT_DELAY=ms] saves what the overlay draws, then quits
+    const shot = process.env.NEKO_OVERLAY_SHOT;
+    if (shot) {
+      setTimeout(async () => {
+        const img = await win.webContents.capturePage();
+        require('fs').writeFileSync(shot, img.toPNG());
+        console.log(`[neko] overlay capture saved to ${shot}`);
+        app.quit();
+      }, parseInt(process.env.NEKO_OVERLAY_SHOT_DELAY || '8000', 10));
+    }
   });
+  if (process.env.NEKO_DEBUG) {
+    win.webContents.on('console-message', (e) => console.log(`[page ${e.level}] ${e.message}`));
+  }
   win.webContents.on('render-process-gone', () => scheduleRetry());
   // Links open in the real browser, never inside the overlay.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -85,7 +98,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith(BASE)) { e.preventDefault(); shell.openExternal(url); }
+    if (!url.startsWith(BASE + '/')) { e.preventDefault(); shell.openExternal(url); }
   });
 
   win.loadURL(OVERLAY_URL).catch(() => {});

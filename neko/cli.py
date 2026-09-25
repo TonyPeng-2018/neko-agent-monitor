@@ -162,6 +162,37 @@ def build_plist(port: int | None = None) -> dict:
     }
 
 
+OVERLAY_LABEL = config.LAUNCHD_LABEL + ".overlay"
+
+
+def overlay_plist_path() -> Path:
+    return config.launch_agents_dir() / f"{OVERLAY_LABEL}.plist"
+
+
+def build_overlay_plist(port: int | None = None) -> dict | None:
+    """Second agent for the Electron overlay; None if `npm install` hasn't run in overlay/."""
+    odir = config.REPO_ROOT / "overlay"
+    exe = odir / "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+    if not exe.exists():
+        return None
+    env = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"}
+    if port:
+        env["NEKO_PORT"] = str(port)
+    log = str(config.log_file().with_name("neko-overlay.log"))
+    return {
+        "Label": OVERLAY_LABEL,
+        "ProgramArguments": [str(exe), str(odir)],
+        "WorkingDirectory": str(odir),
+        "EnvironmentVariables": env,
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},  # Quit from the tray stays quit until next login
+        "ThrottleInterval": 10,
+        "ProcessType": "Interactive",
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    }
+
+
 def _launchctl(*args) -> subprocess.CompletedProcess:
     if os.environ.get("NEKO_NO_LAUNCHCTL"):
         return subprocess.CompletedProcess(args, 0, "", "")
@@ -187,10 +218,28 @@ def cmd_install(a) -> int:
           f"\n  → logs: {config.log_file()}\n  → {config.base_url(a.port)}/  (=^･ω･^=)")
     if not config.hf_model_cached():
         print("  (tip: `neko fetch-model` then `neko install` again to run fully offline)")
+    if a.overlay:
+        op = build_overlay_plist(a.port)
+        if op is None:
+            print("overlay: run `cd overlay && npm install` first")
+            return 1
+        _launchctl("bootout", f"{domain}/{OVERLAY_LABEL}")
+        with open(overlay_plist_path(), "wb") as f:
+            plistlib.dump(op, f)
+        r = _launchctl("bootstrap", domain, str(overlay_plist_path()))
+        if r.returncode != 0:
+            print(f"overlay: launchctl bootstrap failed: {r.stderr.strip() or r.stdout.strip()}")
+            return 1
+        print(f"installed {overlay_plist_path()}\n  → the desktop overlay starts at login too")
     return 0
 
 
 def cmd_uninstall(a) -> int:
+    op = overlay_plist_path()
+    _launchctl("bootout", f"gui/{os.getuid()}/{OVERLAY_LABEL}")
+    if op.exists():
+        op.unlink()
+        print(f"removed {op}")
     p = plist_path()
     _launchctl("bootout", f"gui/{os.getuid()}/{config.LAUNCHD_LABEL}")
     if p.exists():
@@ -267,6 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("install", help="install launchd agent (auto start at login)")
     s.add_argument("--port", type=int, default=None)
+    s.add_argument("--overlay", action="store_true", help="also start the desktop overlay at login")
     s.set_defaults(fn=cmd_install)
     s = sub.add_parser("uninstall", help="remove launchd agent")
     s.set_defaults(fn=cmd_uninstall)

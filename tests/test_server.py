@@ -333,3 +333,13 @@ def test_identical_prompts_get_distinct_names():
     one = [mk(1)]
     solo.attach_personas(one)
     assert names[0] == one[0].persona["name"]
+
+
+def test_overlay_plist_points_at_electron():
+    from neko import cli
+    p = cli.build_overlay_plist(8765)
+    if p is None:  # overlay deps not installed on this machine
+        return
+    assert p["Label"].endswith(".overlay")
+    assert p["ProgramArguments"][0].endswith("MacOS/Electron")
+    assert p["KeepAlive"] == {"SuccessfulExit": False}

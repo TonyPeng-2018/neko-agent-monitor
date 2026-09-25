@@ -93,24 +93,30 @@ function yarn(pos, color) {
 
 export function buildRoom(scene, R) {
   const room = new THREE.Group();
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(R + 1, R + 0.85, 0.5, 72), toon('#f6d3c9'));
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.5, R + 0.35, 0.5, 72), toon('#f6d3c9'));
   base.position.y = -0.3;
   base.material.userData.outlineParameters.thickness = 0.002;
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(R + 1, R + 1, 0.04, 72), toon('#fff3ea', { outline: false }));
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.5, R + 0.5, 0.04, 72), toon('#fff3ea', { outline: false }));
   top.position.y = -0.02;
   const rug = new THREE.Mesh(new THREE.CircleGeometry(R * 0.72, 64), new THREE.MeshToonMaterial({ map: rugTexture() }));
   rug.material.userData.outlineParameters = { visible: false };
   rug.rotation.x = -Math.PI / 2;
   rug.position.y = 0.001;
   room.add(base, top, rug);
-  const k = (R + 0.4) / 5.2;
-  room.add(plant([-4.4 * k, 0, -2.6 * k], 1.25, '#9fdcaa'));
-  room.add(plant([4.6 * k, 0, -2.0 * k], 1.0, '#b5e3a1'));
-  room.add(plant([3.2 * k, 0, 3.8 * k], 0.8, '#a8dcc8'));
-  room.add(cushion([-3.8 * k, 0, 3.0 * k], '#ffc8dd', 0.3));
-  room.add(cushion([1.2 * k, 0, -4.8 * k], '#cfe3ff', 0.8));
-  room.add(yarn([-1.6 * k, 0, -4.6 * k], '#ffb3c7'));
-  room.add(yarn([4.8 * k, 0, 1.4 * k], '#c9b8ff'));
+  const k = (R - 0.1) / 5.2;
+  const obstacles = []; // footprints the characters walk around ({x, z, r})
+  const add = (obj, r) => {
+    room.add(obj);
+    obstacles.push({ x: obj.position.x, z: obj.position.z, r });
+  };
+  add(plant([-4.4 * k, 0, -2.6 * k], 1.25, '#9fdcaa'), 0.42);
+  add(plant([4.6 * k, 0, -2.0 * k], 1.0, '#b5e3a1'), 0.34);
+  add(plant([3.2 * k, 0, 3.8 * k], 0.8, '#a8dcc8'), 0.28);
+  add(cushion([-3.0 * k, 0, -3.9 * k], '#ffc8dd', 0.3), 0.5);
+  add(cushion([1.4 * k, 0, -4.8 * k], '#cfe3ff', 0.8), 0.5);
+  add(yarn([-0.7 * k, 0, -4.9 * k], '#ffb3c7'), 0.2);
+  add(yarn([4.8 * k, 0, 1.4 * k], '#c9b8ff'), 0.2);
+  room.userData.obstacles = obstacles;
   scene.add(room);
   return room;
 }
@@ -277,10 +283,11 @@ export class Hud {
     this.card.style.top = y + 'px';
   }
 
-  /** Per-frame: move name tags over heads. */
+  /** Per-frame: move name tags over heads, decluttered so labels never pile up. */
   frame(camera, critters) {
     const v = new THREE.Vector3();
     const W = innerWidth, H = innerHeight;
+    const items = [];
     for (const [id, c] of critters) {
       let t = this.tags.get(id);
       if (!t) {
@@ -295,6 +302,7 @@ export class Hud {
         t._key = key;
         t.className = `tag ${st} ${c.isKitten ? 'kit' : ''}`;
         t.innerHTML = `<i style="background:${STATE_COLOR[st]}"></i>${esc(c.P.name)}`;
+        t._w = 0;
       }
       c.headWorld(v);
       v.y += 0.1 * c.baseScale() + 0.1;
@@ -302,12 +310,28 @@ export class Hud {
       v.project(camera);
       const vis = v.z < 1 && !c.dead && (!this.overlay || this.world.hoverId === id);
       t.style.display = vis ? '' : 'none';
-      if (vis) {
-        const x = (v.x * 0.5 + 0.5) * W, y = (-v.y * 0.5 + 0.5) * H;
-        t.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
-        t.style.zIndex = String(1000 - Math.round(v.z * 500));
-        t.style.opacity = c.gone ? '0' : '1';
+      if (!vis) continue;
+      if (!t._w) (t._w = t.offsetWidth || 70), (t._h = t.offsetHeight || 22);
+      const focus = this.world.hoverId === id || this.world.hoverListId === id || this.selected === id;
+      const prio = (focus ? 100 : 0) + (st === 'waiting' ? 50 : st === 'error' ? 40 : 0) + (c.isKitten ? 0 : 10) + (v.y < 1 ? -v.z : 0);
+      items.push({ t, c, x: (v.x * 0.5 + 0.5) * W, y: (-v.y * 0.5 + 0.5) * H, z: v.z, prio, keep: focus || st === 'waiting' || st === 'error' });
+    }
+    // greedy placement: important / nearer tags first; others nudge up, else fade out
+    items.sort((a, b) => b.prio - a.prio);
+    const placed = [];
+    const hit = (x, y, w, h) => placed.some((r) => x - w / 2 < r.x + r.w / 2 && x + w / 2 > r.x - r.w / 2 && y - h < r.y && y > r.y - r.h);
+    for (const it of items) {
+      const w = it.t._w + 4, h = it.t._h + 2;
+      let y = it.y, ok = !hit(it.x, y, w, h);
+      for (let k = 1; !ok && k <= 2; k++) {
+        const up = it.y - k * h;
+        if (!hit(it.x, up, w, h)) (y = up), (ok = true);
       }
+      if (ok || it.keep) placed.push({ x: it.x, y, w, h });
+      const t = it.t;
+      t.style.transform = `translate(${it.x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+      t.style.zIndex = String(1000 - Math.round(it.z * 500) + (it.keep ? 500 : 0));
+      t.style.opacity = it.c.gone ? '0' : ok || it.keep ? '1' : '0';
     }
     for (const [id, t] of this.tags) {
       if (!critters.has(id)) {

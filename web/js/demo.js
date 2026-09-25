@@ -27,6 +27,18 @@ let seq = 0;
 let nameI = Math.floor(Math.random() * 24);
 let hueCursor = r();
 
+const liveNames = new Set(); // like the daemon: two live agents never share a name
+function freshName() {
+  for (let i = 0; i < NAMES.length; i++) {
+    const n = NAMES[nameI++ % NAMES.length];
+    if (!liveNames.has(n)) return liveNames.add(n), n;
+  }
+  let k = 2;
+  while (liveNames.has(`${NAMES[nameI % NAMES.length]} ${k}`)) k++;
+  const n = `${NAMES[nameI++ % NAMES.length]} ${k}`;
+  return liveNames.add(n), n;
+}
+
 function persona(roleName, parent) {
   const role = ROLES[roleName];
   hueCursor = (hueCursor + 0.381966) % 1; // golden-angle hue spread
@@ -39,7 +51,7 @@ function persona(roleName, parent) {
   }
   return {
     v: 1,
-    name: NAMES[nameI++ % NAMES.length],
+    name: freshName(),
     species: parent && r() < 0.6 ? parent.species : pick(SPECIES),
     role: roleName,
     hat: r() < 0.7 ? role.hat : pick(EXTRA_HATS.concat(HATS)),
@@ -125,7 +137,10 @@ export function startDemo(onSnapshot, { count } = {}) {
       a._life += dt;
       if (a.state === 'done') {
         a._doneFor = (a._doneFor || 0) + dt;
-        if (a._doneFor > 8) agents.splice(i, 1);
+        if (a._doneFor > 8) {
+          agents.splice(i, 1);
+          liveNames.delete(a.persona.name);
+        }
         continue;
       }
       if (a.state === 'working') {
@@ -157,7 +172,7 @@ export function startDemo(onSnapshot, { count } = {}) {
       }
     }
     const live = agents.filter((a) => a.kind !== 'subagent' && a.state !== 'done').length;
-    if (live < 5 || (live < 10 && r() < 0.008)) agents.push(newAgent(null, { state: 'working' }));
+    if (live < Math.max(5, Math.round(n * 0.8)) || (live < Math.max(10, n) && r() < 0.008)) agents.push(newAgent(null, { state: 'working' }));
     const out = agents.map(({ _life, _next, _doneFor, ...rest }) => ({ ...rest }));
     onSnapshot({
       generated_at: tnow,
@@ -175,7 +190,7 @@ export function startDemo(onSnapshot, { count } = {}) {
 }
 
 /** Static line-up of every species (for ?gallery=1 screenshots / cuteness review). */
-export function gallerySnapshot(state = 'idle') {
+export function gallerySnapshot(state = 'idle', over = {}) {
   const hats = ['none', 'detective', 'hardhat', 'beret', 'crown', 'beanie', 'bow', 'wizard'];
   const props = ['none', 'magnifier', 'laptop', 'brush', 'clipboard', 'quill', 'bugnet', 'wrench'];
   const outfits = ['scarf', 'none', 'overalls', 'bowtie', 'cape', 'hoodie', 'apron', 'sweater'];
@@ -196,6 +211,7 @@ export function gallerySnapshot(state = 'idle') {
           name: NAMES[i], species: sp, hat: hats[i], prop: props[i], outfit: outfits[i], fur, fur2: shade(fur, 0.1, -0.3),
           accent: hslHex(h + 0.45, 0.7, 0.72), pattern: pats[i], eyes: eyes[i], eye_color: '#3b2a2a', mouth: mouths[i], blush: true,
           ear_size: 1, chubby: 1, tail: 1, bounce: 0.5, speed: 1,
+          ...over, // ?hat=wizard&prop=…&outfit=…&ear_size=1.2: every species wears it
         },
       };
     }),

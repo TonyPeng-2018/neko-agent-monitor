@@ -58,6 +58,9 @@ export class Critter {
     world.scene.add(this.root);
     this.rig.proxy.userData.critter = this;
 
+    this.sizeT = sizeFromContext(agent.context_pct);
+    this.size = this.sizeT;
+    this.parentId = agent.parent_id || null;
     this.pos = world.spawnPoint(this);
     this.yaw = world.mode === 'overlay' ? 0 : (Math.random() - 0.5) * 1.2;
     this.phase = Math.random() * 10;
@@ -85,8 +88,6 @@ export class Critter {
     this.poke = 0;
     this.zT = 0;
     this.puffT = 0;
-    this.sizeT = sizeFromContext(agent.context_pct);
-    this.size = this.sizeT;
     this.lastCost = agent.cost_usd || 0;
     this.lastCost10 = agent.cost_10m || 0;
 
@@ -137,8 +138,14 @@ export class Critter {
     world.fx.sparkles(this.pos, this.baseScale() * 1.1);
   }
 
-  baseScale() {
+  /** Size from context %, before the crowd factor. */
+  rawScale() {
     return (this.isKitten ? 0.55 : 1) * this.size;
+  }
+
+  /** Rendered size: everyone shrinks a little when the island gets crowded. */
+  baseScale() {
+    return this.rawScale() * (this.world.crowd || 1);
   }
 
   setAgent(a, first = false) {
@@ -374,8 +381,22 @@ export class Critter {
     const P = this.P;
     const r = this.rig;
 
+    // crowded while sitting / waiting? get up, toddle to a roomier spot, settle again
+    const still = !this.leaving && !this.parentId && ['idle', 'sleeping', 'waiting', 'error'].includes(this.state);
+    if (still && !this.shuffle && world.roomAround && world.mode !== 'overlay') {
+      this.crowdT = world.roomAround(this) < -0.12 ? (this.crowdT || 0) + dt : 0;
+      if (this.crowdT > 1.2 + (this.phase % 1)) {
+        this.shuffle = world.freeSpot(this);
+        this.crowdT = 0;
+      }
+    }
+    if (this.shuffle && (!still || _v.subVectors(this.shuffle, this.pos).setY(0).length() < 0.12)) {
+      this.shuffle = null;
+      if (this.state !== 'working') this.target = null;
+    }
+
     // state weights
-    const target = this.leaving ? 'done' : this.state;
+    const target = this.leaving ? 'done' : this.shuffle ? 'working' : this.state;
     for (const s of STATES) this.w[s] += ((s === target ? 1 : 0) - this.w[s]) * damp(6, dt);
     if (this.state === 'done' || this.leaving) this.doneT += dt;
     if (this.state === 'done' && !this.leaving && this.doneT > 2.8) this.depart();
@@ -396,6 +417,9 @@ export class Critter {
         }
         if (world.isOutside(this.pos) || this.leaveT > 14) this.gone = true;
       }
+    } else if (this.shuffle) {
+      this.target = this.shuffle;
+      moving = true;
     } else if (this.state === 'working') {
       if (parent && !parent.leaving) {
         const idx = this.followIndex || 0;
@@ -550,6 +574,7 @@ export class Critter {
       this.bubble.position.set(headPos.x + 0.12 * sc, headPos.y + 0.12 * sc + Math.sin(t * 3) * 0.03, headPos.z);
     }
     this.glow.material.opacity = wWait * (0.3 + Math.sin(t * 4) * 0.12);
+    this.glow.visible = this.glow.material.opacity > 0.01;
     // dizzy stars orbit
     const wErr = this.w.error;
     this.stars.visible = wErr > 0.05;

@@ -5,6 +5,7 @@
 // inverted-hull outlines via three/addons OutlineEffect (per-material outlineParameters).
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Face, FACE_PHI_LEN, FACE_THETA_START, FACE_THETA_LEN } from './face.js';
 import { shade, mixHex, lum, SOURCE_COLOR } from './util.js';
 
@@ -25,7 +26,8 @@ function geo(key, make) {
   if (!g) geoCache.set(key, (g = make()));
   return g;
 }
-const SPHERE = () => geo('sphere', () => new THREE.SphereGeometry(1, 40, 28));
+const HEAD_SPHERE = () => geo('headSphere', () => new THREE.SphereGeometry(1, 40, 28));
+const SPHERE = () => geo('sphere', () => new THREE.SphereGeometry(1, 28, 18));
 const SPHERE_LO = () => geo('sphereLo', () => new THREE.SphereGeometry(1, 18, 12));
 const HEMI = () => geo('hemi', () => new THREE.SphereGeometry(1, 36, 14, 0, Math.PI * 2, 0, Math.PI / 2));
 const LOWER_HEMI = () => geo('lhemi', () => new THREE.SphereGeometry(1, 36, 14, 0, Math.PI * 2, Math.PI * 0.48, Math.PI * 0.52));
@@ -69,8 +71,23 @@ export function toon(hex, opts = {}) {
     alpha: 1,
     visible: opts.outline !== false,
   };
+  m.userData.toonArgs = [hex, opts];
   matCache.set(key, m);
   return m;
+}
+
+// Outlines on crumb-sized parts (gems, buttons, knots) cost a draw call each and are
+// invisible at normal zoom: those parts get the outline-less twin of their material.
+const TINY = 0.035;
+function liteFor(o) {
+  const m = o.material;
+  if (!m.userData.toonArgs || m.userData.outlineParameters?.visible === false) return;
+  if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+  const size = o.geometry.boundingSphere.radius * Math.max(Math.abs(o.scale.x), Math.abs(o.scale.y), Math.abs(o.scale.z));
+  if (size < TINY) {
+    const [hex, opts] = m.userData.toonArgs;
+    o.material = toon(hex, { ...opts, outline: false });
+  }
 }
 function basic(hex, opts = {}) {
   const key = 'b' + hex + JSON.stringify(opts);
@@ -90,7 +107,50 @@ function mesh(g, m, pos, scale, rot) {
     else o.scale.set(scale[0], scale[1], scale[2]);
   }
   if (rot) o.rotation.set(rot[0], rot[1], rot[2]);
+  liteFor(o);
   return o;
+}
+
+/**
+ * Draw-call diet: leaf meshes that share a parent and a material never move relative to
+ * each other, so bake them into one geometry (crown spikes, chef-hat puffs, cheeks…).
+ * Returns the geometries it created (owned by this character).
+ */
+function mergeStatic(root, keep) {
+  const made = [];
+  const parents = [];
+  root.traverse((o) => {
+    if (o.children.length > 1) parents.push(o);
+  });
+  for (const parent of parents) {
+    const byMat = new Map();
+    for (const c of parent.children) {
+      if (!c.isMesh || c.children.length || keep.has(c) || c.renderOrder !== 0) continue;
+      const list = byMat.get(c.material) || [];
+      list.push(c);
+      byMat.set(c.material, list);
+    }
+    for (const [mat, list] of byMat) {
+      if (list.length < 2) continue;
+      const indexed = list.every((m) => m.geometry.index);
+      const geos = list.map((m) => {
+        m.updateMatrix();
+        let g = m.geometry.clone();
+        if (!indexed && g.index) g = g.toNonIndexed();
+        for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+        g.morphAttributes = {};
+        return g.applyMatrix4(m.matrix);
+      });
+      const merged = mergeGeometries(geos, false);
+      geos.forEach((g) => g.dispose());
+      if (!merged) continue;
+      const one = new THREE.Mesh(merged, mat);
+      list.forEach((m) => parent.remove(m));
+      parent.add(one);
+      made.push(merged);
+    }
+  }
+  return made;
 }
 function group(pos, rot) {
   const g = new THREE.Group();
@@ -143,6 +203,9 @@ function palette(P) {
   } else if (P.species === 'frog') {
     C.inner = shade(P.fur, 0.08);
   }
+  // kawaii floor: very dark coats turn into a black blob under toon shading + outline
+  if (lum(C.fur) < 0.46) C.fur = shade(C.fur, 0.46 - lum(C.fur));
+  if (P.species !== 'panda') C.paw = P.species === 'penguin' ? C.fur : lum(C.paw) < 0.46 ? shade(C.paw, 0.46 - lum(C.paw)) : C.paw;
   if (lum(C.fur2) < lum(C.fur) + 0.04) C.fur2 = mixHex(C.fur, '#ffffff', 0.65);
   if (P.pattern === 'socks' || P.pattern === 'tuxedo') C.paw = C.fur2;
   if (P.pattern === 'calico') C.patchA = mixHex('#f4a863', P.fur, 0.2);
@@ -325,7 +388,8 @@ function buildHat(P, C, kind) {
     }
     case 'goggles': {
       h.add(mesh(torus(1, 0.035), toon(shade(P.accent, -0.25)), [0, 0.1, 0], [HEAD_W * 0.99, HEAD_R * 0.98, 1], [Math.PI / 2, 0, 0]));
-      for (const side of [-1, 1]) {
+      // a frog's eyes sit where the pushed-up lenses would go: frogs get the strap only
+      for (const side of P.species === 'frog' ? [] : [-1, 1]) {
         const g = group([side * 0.11, 0.2, 0.25], [-0.55, side * 0.25, 0]);
         g.add(mesh(torus(0.075, 0.024), toon('#b8bcc8'), [0, 0, 0], 1));
         g.add(mesh(CYL(), toon('#a8e4ff', { outline: false, emissive: '#6ac8ff', emissiveIntensity: 0.25 }), [0, 0, 0], [0.072, 0.02, 0.072], [Math.PI / 2, 0, 0]));
@@ -652,7 +716,7 @@ export function buildCharacter(P, { source = 'claude' } = {}) {
   const headShape = group(null);
   headShape.scale.set(HEAD_W, HEAD_H, HEAD_R);
   head.add(headShape);
-  headShape.add(mesh(SPHERE(), toon(C.fur)));
+  headShape.add(mesh(HEAD_SPHERE(), toon(C.fur)));
 
   const face = new Face({ ...P, fur: C.fur, fur2: C.fur2, dark: C.dark, stripe: C.stripe, patchA: C.patchA, patchB: C.patchB });
   const faceMat = new THREE.MeshToonMaterial({ map: face.tex, gradientMap: GRADIENT, transparent: true, depthWrite: false });
@@ -676,8 +740,12 @@ export function buildCharacter(P, { source = 'claude' } = {}) {
 
   const hat = buildHat(P, C, P.hat);
   if (P.species === 'frog') {
-    hat.position.set(0, 0.1, -0.06);
-    hat.scale.setScalar(0.85);
+    if (P.hat === 'visor' || P.hat === 'goggles') {
+      hat.position.set(0, -0.035, 0); // headband goes under the eye bumps, not across the eyes
+    } else {
+      hat.position.set(0, 0.1, -0.06);
+      hat.scale.setScalar(0.85);
+    }
   }
   head.add(hat);
 
@@ -695,10 +763,13 @@ export function buildCharacter(P, { source = 'claude' } = {}) {
   const proxy = mesh(SPHERE_LO(), new THREE.MeshBasicMaterial({ visible: false }), [0, 0.5, 0], [0.42, 0.55, 0.38]);
   scaler.add(proxy);
 
+  const merged = mergeStatic(root, new Set([shadow, proxy, faceMesh]));
+
   return {
     root, scaler, body, facing, torso, headPivot, head, ears, bumps, tail, arms, legs, hat, prop,
     cape: parts.cape || null, face, shadow, proxy, headTop, sweatAnchor, palette: C,
     dispose() {
+      merged.forEach((g) => g.dispose());
       face.dispose();
       bodyTex.dispose();
       bodyMat.dispose();

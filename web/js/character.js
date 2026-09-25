@@ -20,11 +20,46 @@ function makeGradient() {
 }
 export const GRADIENT = makeGradient();
 
+// ------------------------------------------------------------------ shared-resource refcounts
+// Geometries and materials are cached by key, and many keys depend on a persona's own colours
+// or proportions — so without release the caches would grow with every agent ever seen.
+// Everything touched while building a character is retained by it and released on dispose;
+// the last release disposes the resource. Things first used outside a build (room decor, fx)
+// are pinned and live forever.
+const refs = new Map();      // resource -> count
+const pinned = new Set();
+let building = null;         // Set of resources touched by the build in progress
+function touch(res) {
+  if (building) building.add(res);
+  else pinned.add(res);
+  return res;
+}
+function releaseAll(list) {
+  for (const res of list) {
+    const n = (refs.get(res) || 0) - 1;
+    if (n > 0) {
+      refs.set(res, n);
+      continue;
+    }
+    refs.delete(res);
+    if (pinned.has(res)) continue;
+    const key = res.userData.cacheKey;
+    if (res.isBufferGeometry) geoCache.delete(key);
+    else matCache.delete(key);
+    res.dispose();
+  }
+}
+/** Live cache sizes (debug / leak checks). */
+export const cacheStats = () => ({ geometries: geoCache.size, materials: matCache.size, pinned: pinned.size });
+
 const geoCache = new Map();
 function geo(key, make) {
   let g = geoCache.get(key);
-  if (!g) geoCache.set(key, (g = make()));
-  return g;
+  if (!g) {
+    geoCache.set(key, (g = make()));
+    g.userData.cacheKey = key;
+  }
+  return touch(g);
 }
 const HEAD_SPHERE = () => geo('headSphere', () => new THREE.SphereGeometry(1, 40, 28));
 const SPHERE = () => geo('sphere', () => new THREE.SphereGeometry(1, 28, 18));
@@ -53,7 +88,7 @@ function outlineOf(hex) {
 export function toon(hex, opts = {}) {
   const key = hex + JSON.stringify(opts);
   let m = matCache.get(key);
-  if (m) return m;
+  if (m) return touch(m);
   m = new THREE.MeshToonMaterial({
     color: hex,
     gradientMap: GRADIENT,
@@ -72,8 +107,9 @@ export function toon(hex, opts = {}) {
     visible: opts.outline !== false,
   };
   m.userData.toonArgs = [hex, opts];
+  m.userData.cacheKey = key;
   matCache.set(key, m);
-  return m;
+  return touch(m);
 }
 
 // Outlines on crumb-sized parts (gems, buttons, knots) cost a draw call each and are
@@ -92,11 +128,12 @@ function liteFor(o) {
 function basic(hex, opts = {}) {
   const key = 'b' + hex + JSON.stringify(opts);
   let m = matCache.get(key);
-  if (m) return m;
+  if (m) return touch(m);
   m = new THREE.MeshBasicMaterial({ color: hex, transparent: !!opts.transparent, opacity: opts.opacity ?? 1, side: opts.side ?? THREE.FrontSide });
   m.userData.outlineParameters = { visible: opts.outline === true, thickness: 0.003, color: outlineOf(hex) };
+  m.userData.cacheKey = key;
   matCache.set(key, m);
-  return m;
+  return touch(m);
 }
 
 function mesh(g, m, pos, scale, rot) {
@@ -636,7 +673,25 @@ function buildOutfit(P, C, kind, torso, parts) {
  * Build a chibi from a normalised persona.
  * Returns handles the animator drives; everything hangs off `root` (placed on the floor).
  */
-export function buildCharacter(P, { source = 'claude' } = {}) {
+export function buildCharacter(P, opts = {}) {
+  const prev = building;
+  building = new Set();
+  try {
+    const rig = buildCharacterInner(P, opts);
+    const held = [...building];
+    for (const res of held) refs.set(res, (refs.get(res) || 0) + 1);
+    const inner = rig.dispose;
+    rig.dispose = () => {
+      inner();
+      releaseAll(held);
+    };
+    return rig;
+  } finally {
+    building = prev;
+  }
+}
+
+function buildCharacterInner(P, { source = 'claude' } = {}) {
   const C = palette(P);
   const root = group(null);
   const scaler = group(null); // size (context %) + spawn pop

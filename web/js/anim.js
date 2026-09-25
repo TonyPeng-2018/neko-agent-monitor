@@ -52,6 +52,7 @@ export class Critter {
     this.id = agent.id;
     this.agent = agent;
     this.P = normPersona(agent.persona, agent.id);
+    this.lookKey = JSON.stringify(agent.persona || null);
     this.isKitten = agent.kind === 'subagent';
     this.rig = buildCharacter(this.P, { source: agent.source });
     this.root = this.rig.root;
@@ -138,6 +139,27 @@ export class Critter {
     world.fx.sparkles(this.pos, this.baseScale() * 1.1);
   }
 
+  /** The daemon can revise a persona after first sight (the creation prompt shows up
+   *  later, or a hue is rotated away from a newcomer's), so swap in a matching model;
+   *  otherwise a page that saw the early persona keeps drawing a different animal. */
+  rebuild() {
+    const old = this.rig;
+    this.P = normPersona(this.agent.persona, this.id);
+    const r = buildCharacter(this.P, { source: this.agent.source });
+    r.root.position.copy(old.root.position);
+    r.root.rotation.copy(old.root.rotation);
+    r.sweatAnchor.add(this.sweat);
+    r.head.add(this.stars);
+    r.scaler.add(this.ringBg, this.ring, this.glow);
+    r.proxy.userData.critter = this;
+    this.world.scene.remove(old.root);
+    this.world.scene.add(r.root);
+    old.dispose();
+    this.rig = r;
+    this.root = r.root;
+    this.world.fx.sparkles(this.pos, this.baseScale() * 0.9);
+  }
+
   /** Size from context %, before the crowd factor. */
   rawScale() {
     return (this.isKitten ? 0.55 : 1) * this.size;
@@ -151,6 +173,11 @@ export class Critter {
   setAgent(a, first = false) {
     this.agent = a;
     this.parentId = a.parent_id || null;
+    const lookKey = JSON.stringify(a.persona || null);
+    if (lookKey !== this.lookKey) {
+      this.lookKey = lookKey;
+      this.rebuild();
+    }
     const st = STATES.includes(a.state) ? a.state : 'idle';
     if (st !== this.state) {
       if (st === 'done') this.doneT = 0;

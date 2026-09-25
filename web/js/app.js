@@ -7,6 +7,7 @@ import { FX } from './fx.js';
 import { Hud, buildRoom } from './hud.js';
 import { startDemo, gallerySnapshot } from './demo.js';
 import { clamp } from './util.js';
+import { cacheStats } from './character.js';
 
 const qs = new URLSearchParams(location.search);
 const OVERLAY = qs.get('overlay') === '1';
@@ -290,7 +291,10 @@ function applySnapshot(snap) {
     if (firstSnap && a.state === 'done') continue;
     seen.add(a.id);
     const c = critters.get(a.id);
-    if (!c) critters.set(a.id, new Critter(a, world));
+    if (!c) {
+      critters.set(a.id, new Critter(a, world));
+      window.__nekoSpawned = (window.__nekoSpawned || 0) + 1;
+    }
     else if (!c.leaving || a.state !== c.state) c.setAgent(a);
   }
   firstSnap = false;
@@ -584,10 +588,29 @@ window.nekoStats = () => {
     const op = o.material.userData.outlineParameters;
     if (!op || op.visible !== false) outlined++;
   });
-  return { calls: drawCalls, triangles: drawTris, critters: critters.size, meshes, outlined, sprites };
+  const mem = renderer.info.memory; // live GPU resources — should stay flat as agents come and go
+  return { calls: drawCalls, triangles: drawTris, critters: critters.size, meshes, outlined, sprites,
+           geometries: mem.geometries, textures: mem.textures, cache: cacheStats(), pixelRatio: pr };
 };
 let acc = 0;
 let frames = 0;
+// Adaptive resolution: a huge crowd (100+ agents) on a slow GPU drops the pixel ratio in
+// steps until frames are back under ~25 ms, and climbs back up when there's headroom.
+const PR_MAX = Math.min(devicePixelRatio || 1, 2);
+let pr = PR_MAX, slowT = 0, fastT = 0, emaDt = 1 / 60;
+function adaptQuality(dt) {
+  if (document.hidden || dt > 0.25) return; // tab switches / stalls aren't load
+  emaDt += (dt - emaDt) * 0.05;
+  slowT = emaDt > 1 / 40 ? slowT + dt : 0;
+  fastT = emaDt < 1 / 55 ? fastT + dt : 0;
+  const next = slowT > 2 && pr > 1 ? pr - 0.25 : fastT > 8 && pr < PR_MAX ? pr + 0.25 : pr;
+  if (next !== pr) {
+    pr = Math.max(1, Math.min(PR_MAX, next));
+    renderer.setPixelRatio(pr);
+    slowT = fastT = 0;
+  }
+}
+
 function frame() {
   requestAnimationFrame(frame);
   window.nekoFrames = ++frames;
@@ -600,6 +623,7 @@ function frame() {
     dt = acc;
     acc = 0;
   }
+  adaptQuality(dt);
   dt = Math.min(dt, 0.05);
   // ?warm=N: fast-forward N simulated seconds once (for headless screenshots)
   if (qs.has('warm') && critters.size && !window.__warmed && (!qs.has('warmAfter') || performance.now() > Number(qs.get('warmAfter')))) {

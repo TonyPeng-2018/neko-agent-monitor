@@ -259,3 +259,25 @@ def test_store_survives_corrupt_file(hashed, tmp_path):
     store = P.PersonaStore(str(path))
     assert_valid(store.get_or_create("hello"))
     assert json.loads(path.read_text())
+
+
+def test_worker_process_matches_inprocess(model, monkeypatch):
+    """The daemon's out-of-process embedder gives the same vectors and exits when idle."""
+    inproc = E.embed(["调研类似产品", "fix failing tests"])
+    monkeypatch.setenv("NEKO_EMBED_IDLE", "5")
+    E.use_worker(True)
+    try:
+        E._reset_for_tests()
+        out = E.embed(["调研类似产品", "fix failing tests"])
+        assert E._backend[0] == "worker"
+        for a, b in zip(inproc, out):
+            assert sum(x * y for x, y in zip(a, b)) > 0.9999
+        w = E._backend[1]
+        w.last_use = 0
+        w._reap()
+        assert w.proc is None
+        again = E.embed(["fix failing tests"])       # respawns on demand
+        assert sum(x * y for x, y in zip(again[0], inproc[1])) > 0.9999
+    finally:
+        E.use_worker(False)
+        E._reset_for_tests()

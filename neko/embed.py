@@ -15,14 +15,25 @@ Environment:
 
 ``emb_version()`` names the backend actually in use; it is stored with every
 persona so cached looks are invalidated when the embedder changes.
+
+The long-running daemon calls :func:`use_worker` so the model lives in a child
+process (``python -m neko.embed --worker``) that exits after ``NEKO_EMBED_IDLE``
+seconds (default 90) without work. The model + tokenizer take ~1.5 GB of RSS and
+a Python process never hands most of it back, while new agents (the only thing
+that needs an embedding) appear only now and then. A background daemon should
+idle small.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
+import subprocess
+import sys
 import threading
+import time
 
 DIM = 256
 DEFAULT_MODEL = "minishlab/potion-multilingual-128M"
@@ -59,6 +70,130 @@ def _load_model2vec(repo: str):
         return None
 
 
+def fetch_model() -> str:
+    """Download the model weights into the Hugging Face cache (for `neko fetch-model`)."""
+    from huggingface_hub import snapshot_download
+    return snapshot_download(_model_repo(), allow_patterns=_ALLOW)
+
+
+# ── out-of-process model (daemon) ──────────────────────────────────────────
+
+_use_worker = False
+
+
+def use_worker(on: bool = True) -> None:
+    """Run the model in a child process that exits when idle (see module doc)."""
+    global _use_worker
+    _use_worker = bool(on)
+
+
+def _idle_after() -> float:
+    try:
+        return max(5.0, float(os.environ.get("NEKO_EMBED_IDLE", "90")))
+    except ValueError:
+        return 90.0
+
+
+class _Worker:
+    """A `python -m neko.embed --worker` child speaking JSON lines on stdin/stdout."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc: subprocess.Popen | None = None
+        self.last_use = 0.0
+        self.timer: threading.Timer | None = None
+
+    def _spawn(self):
+        env = dict(os.environ, NEKO_EMBED_MODEL=_model_repo())
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        self.proc = subprocess.Popen(
+            [sys.executable, "-m", "neko.embed", "--worker"], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd=root)
+        ready = json.loads(self.proc.stdout.readline() or b"{}")
+        if not ready.get("version"):
+            self._kill()
+            return None
+        return ready["version"]
+
+    def _kill(self):
+        p, self.proc = self.proc, None
+        if p is not None:
+            try:
+                p.stdin.close()
+                p.wait(timeout=2)
+            except Exception:
+                p.kill()
+
+    def _arm(self):
+        if self.timer is not None:
+            self.timer.cancel()
+        self.timer = threading.Timer(_idle_after() + 0.5, self._reap)
+        self.timer.daemon = True
+        self.timer.start()
+
+    def _reap(self):
+        with self.lock:
+            if self.proc is not None and time.time() - self.last_use >= _idle_after():
+                self._kill()
+
+    def start(self):
+        """Spawn and report the model version (None → model unavailable)."""
+        with self.lock:
+            try:
+                v = self._spawn()
+            except Exception:
+                self._kill()
+                return None
+            self.last_use = time.time()
+            self._arm()
+            return v
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        with self.lock:
+            for attempt in (0, 1):
+                try:
+                    if self.proc is None or self.proc.poll() is not None:
+                        if not self._spawn():
+                            raise RuntimeError("model unavailable")
+                    self.proc.stdin.write(json.dumps({"texts": texts}).encode() + b"\n")
+                    self.proc.stdin.flush()
+                    out = json.loads(self.proc.stdout.readline() or b"{}")
+                    if "vecs" not in out:
+                        raise RuntimeError(out.get("error") or "worker died")
+                    self.last_use = time.time()
+                    self._arm()
+                    return out["vecs"]
+                except Exception:
+                    self._kill()
+                    if attempt:
+                        raise
+        raise RuntimeError("unreachable")
+
+
+def _worker_main() -> int:
+    """Child side: load the model once, then embed JSON-line requests until EOF."""
+    out = sys.stdout.buffer
+    sys.stdout = sys.stderr          # stray library prints must not corrupt the protocol
+    repo = _model_repo()
+    model = None if os.environ.get("NEKO_EMBED", "").strip().lower() == "hash" else _load_model2vec(repo)
+    out.write(json.dumps({"version": repo.rstrip("/").split("/")[-1] if model else None}).encode()
+              + b"\n")
+    out.flush()
+    if model is None:
+        return 0
+    for line in sys.stdin.buffer:
+        try:
+            texts = json.loads(line)["texts"]
+            arr = model.encode([str(t) for t in texts])
+            resp = {"vecs": [[round(x, 6) for x in row] for row in arr.tolist()]}
+        except Exception as e:
+            resp = {"error": repr(e)}
+        out.write(json.dumps(resp).encode() + b"\n")
+        out.flush()
+    return 0
+
+
 def _get_backend() -> tuple:
     """Pick and load the backend exactly once (thread-safe)."""
     global _backend, EMB_VERSION
@@ -69,11 +204,16 @@ def _get_backend() -> tuple:
             chosen = ("hash", None, HASH_VERSION)
             if os.environ.get("NEKO_EMBED", "").strip().lower() != "hash":
                 repo = _model_repo()
-                model = _models.get(repo) or _load_model2vec(repo)
-                if model is not None:
-                    _models[repo] = model
-                if model is not None:
-                    chosen = ("model", model, repo.rstrip("/").split("/")[-1])
+                if _use_worker:
+                    w = _Worker()
+                    ver = w.start()
+                    if ver:
+                        chosen = ("worker", w, ver)
+                else:
+                    model = _models.get(repo) or _load_model2vec(repo)
+                    if model is not None:
+                        _models[repo] = model
+                        chosen = ("model", model, repo.rstrip("/").split("/")[-1])
             _backend = chosen
             EMB_VERSION = chosen[2]
     return _backend
@@ -88,6 +228,9 @@ def _reset_for_tests() -> None:
     """Forget the chosen backend so env changes take effect (tests only)."""
     global _backend
     with _lock:
+        if _backend is not None and _backend[0] == "worker":
+            with _backend[1].lock:
+                _backend[1]._kill()
         _backend = None
 
 
@@ -173,13 +316,20 @@ def embed(texts: list[str]) -> list[list[float]]:
         kind, model, _ = _get_backend()
     except Exception:
         kind, model = "hash", None
-    if kind == "model":
+    if kind in ("model", "worker"):
         try:
-            arr = model.encode(texts)
+            rows = model.encode(texts)
+            rows = rows.tolist() if hasattr(rows, "tolist") else rows
             out = []
-            for t, row in zip(texts, arr.tolist()):
+            for t, row in zip(texts, rows):
                 out.append(_normalize(_fit_dim(row)) if t.strip() else [0.0] * DIM)
             return out
         except Exception:
             pass
     return [_hash_embed(t) for t in texts]
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["--worker"]:
+        sys.exit(_worker_main())
+    print(json.dumps({"version": emb_version(), "dim": DIM}))

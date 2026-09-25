@@ -517,6 +517,11 @@ def make_server(host: str | None = None, port: int | None = None, demo: bool = F
 
 
 def serve(port: int | None = None, demo: bool = False, open_browser: bool = False) -> None:
+    try:  # keep the ~1.5 GB model in a child process that exits when idle
+        from . import embed
+        embed.use_worker(True)
+    except Exception:
+        pass
     srv, hub = make_server(port=port, demo=demo)
     hub.start()
     url = f"http://127.0.0.1:{srv.server_address[1]}/"

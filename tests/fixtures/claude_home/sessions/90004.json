@@ -1,0 +1,1 @@
+{"pid": 90004, "sessionId": "44444444-dddd-4ddd-8ddd-000000000004", "cwd": "/work/delta", "startedAt": 1789999200000, "procStart": "Sun Sep 20 10:00:00 2026", "kind": "interactive", "entrypoint": "sdk-cli", "name": "x", "nameSource": "derived", "status": "busy", "statusUpdatedAt": 1789999800000}

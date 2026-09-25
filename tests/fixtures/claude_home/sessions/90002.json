@@ -1,0 +1,1 @@
+{"pid": 90002, "sessionId": "22222222-bbbb-4bbb-8bbb-000000000002", "cwd": "/work/beta", "startedAt": 1789999200000, "procStart": "Sun Sep 20 10:00:00 2026", "kind": "interactive", "entrypoint": "cli", "name": "x", "nameSource": "derived", "status": "waiting", "statusUpdatedAt": 1789999800000, "waitingFor": "permission prompt"}

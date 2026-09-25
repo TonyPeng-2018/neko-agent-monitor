@@ -1,0 +1,4 @@
+{"type": "user", "timestamp": "2026-09-20T10:00:00.000Z", "isSidechain": false, "message": {"role": "user", "content": "<task-notification>bg task finished</task-notification>"}}
+{"type": "user", "timestamp": "2026-09-20T10:00:30.000Z", "isSidechain": false, "message": {"role": "user", "content": "[Request interrupted by user]"}}
+{"type": "user", "timestamp": "2026-09-20T10:01:00.000Z", "isSidechain": false, "message": {"role": "user", "content": "Deploy the staging server"}}
+{"type": "assistant", "timestamp": "2026-09-20T10:02:00.000Z", "isSidechain": false, "message": {"id": "b1", "model": "claude-opus-4-6", "role": "assistant", "stop_reason": null, "content": [{"type": "tool_use", "id": "bt1", "name": "Bash", "input": {"command": "kubectl apply -f staging.yaml"}}], "usage": {"input_tokens": 10, "cache_read_input_tokens": 100000, "cache_creation_input_tokens": 20000, "output_tokens": 500}}}

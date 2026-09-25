@@ -1,0 +1,1 @@
+{"pid": 90005, "sessionId": "55555555-eeee-4eee-8eee-000000000005", "cwd": "/work/eps", "startedAt": 1789999200000, "procStart": "Sun Sep 20 10:00:00 2026", "kind": "interactive", "entrypoint": "cli", "name": "x", "nameSource": "derived", "status": "busy", "statusUpdatedAt": 1789999800000}

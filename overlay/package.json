@@ -1,0 +1,15 @@
+{
+  "name": "neko-overlay",
+  "version": "0.1.0",
+  "description": "Desktop overlay for neko-agent-monitor: kawaii agents walking along the bottom of your screen.",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "TonyPeng-2018",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.0.0"
+  }
+}

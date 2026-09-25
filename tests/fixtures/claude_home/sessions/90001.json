@@ -1,0 +1,1 @@
+{"pid": 90001, "sessionId": "11111111-aaaa-4aaa-8aaa-000000000001", "cwd": "/work/alpha", "startedAt": 1789999200000, "procStart": "Sun Sep 20 10:00:00 2026", "kind": "interactive", "entrypoint": "cli", "name": "x", "nameSource": "derived", "status": "busy", "statusUpdatedAt": 1789999800000}

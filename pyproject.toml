@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neko-agent-monitor"
+version = "0.1.0"
+description = "Every AI agent on your Mac becomes a kawaii chibi animal — a local, private monitor for Claude Code, Codex CLI and the OpenAI Agents SDK."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "TonyPeng-2018" }]
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["claude-code", "codex", "agents", "monitor", "desktop-pet", "kawaii"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+embed = ["model2vec>=0.9"]
+test = ["pytest>=7"]
+
+[project.scripts]
+neko = "neko.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["neko*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

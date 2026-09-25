@@ -1,0 +1,1 @@
+{"pid": 90003, "sessionId": "33333333-cccc-4ccc-8ccc-000000000003", "cwd": "/work/gamma", "startedAt": 1789999200000, "procStart": "Sun Sep 20 10:00:00 2026", "kind": "interactive", "entrypoint": "cli", "name": "x", "nameSource": "derived", "status": "idle", "statusUpdatedAt": 1789999800000}

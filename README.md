@@ -10,25 +10,37 @@ Works with **Claude Code**, **OpenAI Codex CLI** and the **OpenAI Agents SDK**.
 It's 100 % local: a tiny stdlib-Python daemon plus a three.js page, with an
 optional Electron desktop overlay.
 
-| The room (browser) | The overlay (desktop) |
-|---|---|
-| ![room](docs/screenshots/room.png) | ![overlay](docs/screenshots/overlay.png) |
+![the room: every agent is a chibi animal on a cozy island](docs/screenshots/room.png)
+
+![the overlay: agents walking along the bottom of the desktop](docs/screenshots/overlay.png)
+
+![every species (cat, fox, bunny, bear, panda, frog, penguin, hamster) with hats and props](docs/screenshots/species-lineup.png)
 
 ## Quick start
 
 ```bash
 git clone https://github.com/TonyPeng-2018/neko-agent-monitor && cd neko-agent-monitor
-./scripts/install.sh          # venv + model + launchd agent (auto-starts at login)
+./scripts/install.sh          # .venv + pip install -e '.[embed]' + model + launchd agent
 open http://127.0.0.1:8765/
 ```
 
-Or run it by hand:
+`install.sh` does the same thing as these steps, which you can also run by hand:
 
 ```bash
-python3 -m neko serve --open          # real agents   (no install needed, stdlib only)
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e '.[embed]'     # core is stdlib-only; [embed] adds model2vec for smarter looks
+neko fetch-model              # one-time download of the embedding model (~500 MB)
+neko install                  # launchd LaunchAgent: starts at login, restarts if it dies
+neko hooks install            # optional: instant updates from Claude Code (backs up settings.json)
+cd overlay && npm install && npm start   # optional: cats walking on your desktop
+```
+
+To try it without installing anything:
+
+```bash
+python3 -m neko serve --open          # real agents   (stdlib only)
 python3 -m neko serve --demo --open   # fake agents, great for a first look
 python3 -m neko status                # cute table in the terminal
-make overlay                          # cats walking along the bottom of your desktop
 ```
 
 | Command | What it does |
@@ -38,10 +50,14 @@ make overlay                          # cats walking along the bottom of your de
 | `neko install` / `neko uninstall` | launchd LaunchAgent `com.neko-agent-monitor` (RunAtLoad, KeepAlive) |
 | `neko hooks install\|uninstall\|status [--codex]` | opt-in hooks for instant updates |
 | `neko fetch-model` | pre-download the embedding model (then launchd runs with `HF_HUB_OFFLINE=1`) |
+| `make overlay` | desktop overlay (Electron). `make demo`, `make test` also exist |
 
-Needs Python ≥ 3.9. The core has no dependencies. `pip install -e '.[embed]'`
-adds [model2vec](https://github.com/MinishLab/model2vec) for smarter personas.
-Without it, a deterministic hashing fallback is used.
+Needs Python ≥ 3.9 on macOS. Without `[embed]`, a deterministic hashing
+embedding is used instead of [model2vec](https://github.com/MinishLab/model2vec):
+every agent still gets a stable, prompt-dependent look, just less "semantic".
+
+Web page URL options: `?demo=1` (built-in fake agents, `&n=30` for a crowd),
+`?gallery=1` (species line-up, `&hat=wizard` etc.), `?debug=1` (draw-call stats).
 
 ## How states map to animations
 
@@ -49,7 +65,7 @@ Without it, a deterministic hashing fallback is used.
 |---|---|
 | agent created | pops in with a spawn puff |
 | creation prompt | picks species, hat, fur colour/pattern, outfit, face, prop and name |
-| `working` | walks around. Types on a mini laptop (Edit/Write), holds a magnifier (Read/Grep), swings a hammer (Bash) |
+| `working` | toddles around, then stops to use its prop: types on a mini laptop, sweeps a magnifier, paints, swings a bug net, scribbles with a quill… (the prop comes from the prompt's role) |
 | `waiting` (permission / question) | hops, waves and shows a **"!"** bubble with a glow. This state gets top priority |
 | `idle` | sits, blinks slowly, watches your cursor |
 | `sleeping` (quiet > 10 min) | curls up, Zzz |
@@ -61,18 +77,63 @@ Without it, a deterministic hashing fallback is used.
 | subagents | kittens (0.55×, parent's colours) following the parent |
 | source | collar tag: Claude = warm, Codex = mint, Agents SDK = lilac |
 
+Two agents on screen never share a name: if two prompts hash to the same
+name (identical sibling subagents, say), the newcomer takes the next free one.
+A crowd spreads over the island, the camera frames whoever is there, and
+everyone shrinks a little when the island gets full.
+
+## Monitoring details
+
+**Where agents come from** (no hooks needed): Claude Code's live registry
+`~/.claude/sessions/<pid>.json` (checked against the process table so stale
+files are ignored) plus its transcripts and `subagents/agent-*.jsonl`;
+Codex CLI rollouts in `~/.codex/sessions/**` plus `ps`/`lsof` liveness and
+`state_5.sqlite` for the subagent tree; OpenAI Agents SDK runs pushed by
+`neko.collectors.sdk_client.NekoTracingProcessor`. Foreground, background,
+`claude -p` and subagents all show up. Polled every 2 s, pushed over SSE.
+
+| State | Claude Code | Codex CLI | Agents SDK |
+|---|---|---|---|
+| `working` | registry `busy`, or a subagent file written in the last 2 min / a tool still running | `task_started` without `task_complete` | span open |
+| `waiting` | registry `waiting` (`waitingFor`: permission prompt, input needed, dialog…) or a `PermissionRequest` hook | approval request in the rollout, or a `PermissionRequest` hook | — |
+| `idle` | registry `idle` | turn complete, process alive | — |
+| `sleeping` | idle > 10 min, or a `/loop` wakeup is scheduled | idle > 10 min | — |
+| `error` | API error that persists (≥ 3 retries or > 90 s), or the same tool call ≥ 6 of the last 12 | same | span error |
+| `done` | subagent handed back / process exited (shown 20–60 s, then it walks off) | process exited | trace finished |
+
+| Number | Meaning |
+|---|---|
+| `context_tokens` / `context_pct` | prompt size of the latest model call (input + cache read + cache write) over the model's window (1 M for `[1m]` / 1M-context models, else 200 k; Codex reports its own). Resets on `/compact` |
+| `cost_usd` | API-list-price equivalent of the whole session (Claude's own `cost-state` when present, else computed from usage) — not your subscription bill |
+| `cost_10m` | spend in the last 10 minutes (the burn rate; > $1.50 → steam puffs, ≥ $2 → `burn` flag) |
+| `tokens_in` / `tokens_out` | cumulative tokens, cache reads included |
+| `tool_count`, `last_tool` | tool calls so far and the latest one |
+| `progress_done/total` | TodoWrite / Task list progress (the ring under the feet) |
+| flags | `repeat` (stuck loop), `poll` (sleep-polling), `loop` (/loop, crons), `burn`, `context` (near compaction or huge), `longtool` (one tool running > 20 min), `quiet` (busy but silent > 15 min), `toolfail`, `partial` (huge transcript, totals cover the tail) |
+
+Click a character (or a row in the list) for its card: prompt, current
+activity, context bar, cost, model, tools, todos, flags and working directory.
+
 ## Privacy
 
 - **Local only.** The daemon binds `127.0.0.1` and makes no network calls
   (except the one-time model download from Hugging Face, which you can skip).
-  Requests with a foreign `Host` or `Origin` get a 403, which protects against
-  DNS rebinding and cross-site POSTs. Request bodies are capped at 1 MB.
+  The web page and overlay load nothing from the internet either: three.js is
+  vendored in `web/vendor/`, fonts are system fonts, and a CSP pins everything
+  to the local origin. Requests with a foreign `Host` or `Origin` get a 403,
+  which protects against DNS rebinding and cross-site POSTs. Bodies are capped at 1 MB.
 - **Prompts are read locally**, from the transcripts your agents already write,
-  to seed each character's look and to show the task in a tooltip.
-- **Only hashes + traits are persisted.** `~/.neko/personas.json` maps
-  `sha256(prompt)` → look (colours, hat, name…). Prompt text is never stored.
+  to seed each character's look and to show the task in the card. They are
+  never sent anywhere and never written to disk by neko.
+- **Only hashes + traits are persisted.** `~/.neko/personas.json` (mode 600)
+  maps `sha256(prompt)` → look (colours, hat, name…). Prompt text is never stored.
 - neko never writes to `~/.claude` or `~/.codex`. The only exception is the
-  opt-in `neko hooks install`, which backs up the file first.
+  opt-in `neko hooks install`, which backs up the file first and only ever
+  adds/removes its own entries.
+- Light in the background: the daemon idles at ~50 MB and well under 1 % CPU.
+  The embedding model (~1.5 GB in RAM) runs in a child process that only
+  exists while new agents are being dressed up and exits after 90 s idle
+  (`NEKO_EMBED_IDLE`).
 
 ## How it works
 
@@ -90,7 +151,7 @@ Without it, a deterministic hashing fallback is used.
    server.py    → GET /api/agents, GET /api/stream (SSE), static web/
         │
         ▼
-  web/ (three.js procedural toon chibis, no build step)
+  web/ (vendored three.js r186, procedural toon chibis, no build step)
    ├─ browser tab: "room" mode with HUD list + detail card
    └─ overlay/ Electron: transparent, click-through, always-on-top, cats walk
       along the bottom of the desktop; hover a cat for its card
@@ -165,14 +226,16 @@ Environment overrides: `NEKO_PORT`, `NEKO_HOME` (default `~/.neko`),
 
 ## 中文简介
 
-**neko-agent-monitor** 把你 Mac 上运行的每一个 AI Agent（Claude Code、Codex CLI、OpenAI Agents SDK）变成一只可爱的 Q 版小动物。
-外观（物种、帽子、毛色、道具、名字）由创建它的提示词的语义向量决定。体型、动作和道具反映实时监控数据：
-需要你确认权限时会挥手并冒出 “!”，出错时转圈圈眼，长时间空闲会蜷起来睡觉，子 Agent 是跟在后面的小猫崽。
+**neko-agent-monitor** 把你 Mac 上运行的每一个 AI Agent（Claude Code、Codex CLI、OpenAI Agents SDK，
+终端里开的、后台的、`claude -p`、子 Agent 都算）变成一只可爱的 Q 版小动物。
 
-- 快速开始：`./scripts/install.sh`，然后打开 http://127.0.0.1:8765/ 。想先看效果可以运行 `python3 -m neko serve --demo --open`
-- 桌面悬浮层：`make overlay`（透明、鼠标穿透、始终置顶）
-- 隐私：完全本地运行。提示词只在本机读取，持久化的只有哈希和外观特征
-- Hooks 是可选项：`neko hooks install`，修改前会先备份 `settings.json`
+- **外观来自提示词**：用创建它的提示词做语义向量（model2vec 多语言模型，中英文对齐），决定物种、帽子、毛色、花纹、衣服、表情、道具和名字。同一个提示词永远是同一只；同时在场的两只不会重名。
+- **监控数据拟人化**：上下文越满体型越大（超过 80% 会冒汗）；最近 10 分钟花的钱变成头顶的金币，烧钱太快会冒蒸汽；需要你确认权限时会跳着挥手、冒出 “!”；出错或卡在循环里会转圈圈眼；长时间空闲会蜷起来睡觉（Zzz）；完成后撒花、挥手离场；子 Agent 是跟在后面的小猫崽；待办进度是脚下的小圆环。
+- **安装**：`./scripts/install.sh`（创建 .venv、`pip install -e '.[embed]'`、下载模型、安装 launchd 后台服务，开机自启）。然后打开 http://127.0.0.1:8765/ 。先看效果：`python3 -m neko serve --demo --open`
+- **桌面悬浮层**：`cd overlay && npm install && npm start`（透明、鼠标穿透、始终置顶，小动物在屏幕底部走来走去）
+- **Hooks（可选）**：`neko hooks install`，状态变化即时显示；修改前会先备份 `settings.json`，卸载只删除 neko 自己的条目
+- **隐私**：完全本地运行，网页也不访问外网。提示词只在本机读取，不会写入磁盘；持久化的只有提示词的哈希和外观特征
+- **轻量**：后台守护进程约 50 MB 内存、CPU 基本为 0；嵌入模型只在有新 Agent 出现时临时加载，空闲 90 秒后自动退出
 
 ## Credits / borrowed, not reinvented
 
@@ -181,7 +244,8 @@ Environment overrides: `NEKO_PORT`, `NEKO_HOME` (default `~/.neko`),
 | hook → local daemon event design, state vocabulary | Pixel Agents, agent-pet-runtime, claude-pet | MIT (ideas + small snippets with attribution) |
 | state set & idle→sleep timing | Clawd on Desk | AGPL — ideas only, **no code** |
 | embedding model | model2vec potion-multilingual-128M | MIT |
-| toon outline | three.js `OutlineEffect` addon | MIT |
+| 3D engine, toon outline, orbit controls | three.js r186 (`OutlineEffect`, `OrbitControls`, vendored in `web/vendor/three`) | MIT |
+| desktop overlay shell | Electron | MIT |
 | Codex pet pack format (`~/.codex/pets`) | OpenAI Codex | format only (import later) |
 
 ## License

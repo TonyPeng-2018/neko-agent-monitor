@@ -31,7 +31,7 @@ monitoring data.
    server.py    → GET /api/agents, GET /api/stream (SSE), static web/
         │
         ▼
-  web/ (three.js 0.186 procedural toon chibis, no build step)
+  web/ (three.js 0.186 vendored in web/vendor, procedural toon chibis, no build step)
    ├─ browser tab: "room" mode with HUD list + detail card
    └─ overlay/ Electron: transparent, click-through, always-on-top, cats walk
       along the bottom of the desktop; hover a cat for its card
@@ -43,7 +43,7 @@ monitoring data.
 |---|---|
 | agent created | new character pops in (spawn puff) |
 | creation prompt embedding | species, hat, fur colour/pattern, outfit, face, prop, name |
-| `working` (tool/model running) | walks around; typing on mini laptop for Edit/Write, magnifier for Read/Grep, hammer for Bash |
+| `working` (tool/model running) | walks around, then uses its role prop (laptop, magnifier, brush, bug net, quill, chart, wrench, clipboard) |
 | `waiting` (permission / question) | hops + waves, "!" bubble, gentle glow — highest attention priority |
 | `idle` | sits, slow blinks, looks at cursor |
 | `sleeping` (quiet > 10 min or /loop asleep) | curled up, Zzz |
@@ -72,6 +72,9 @@ embedding (no deps). `emb_version` stored with every persona.
 - Name from a kawaii list by sha256(prompt). Hue collision avoidance among live
   agents by golden-angle rotation.
 - Persisted: `~/.neko/personas.json` keyed by sha256(prompt) → traits (no prompt text).
+- The server makes names unique among live agents (oldest keeps its name, a newcomer
+  takes the next free one). `neko serve` runs model2vec in a child process that exits
+  after 90 s idle, so the daemon itself stays ~50 MB.
 
 ## Monitoring design
 

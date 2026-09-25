@@ -5,6 +5,7 @@ import { toon } from './character.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import {
   SPECIES_EMOJI, STATE_COLOR, STATE_LABEL, SOURCE_COLOR, normPersona, fmtTokens, fmtCost, esc, ago, clamp,
+  modelLabel, projectLabel,
 } from './util.js';
 
 // ------------------------------------------------------------------ room
@@ -145,7 +146,7 @@ export function cardHTML(a, compact = false) {
       <div class="avatar" style="background:${esc(P.fur)}">${SPECIES_EMOJI[P.species] || '🐱'}</div>
       <div class="who">
         <div class="name">${esc(P.name)} ${kitten}</div>
-        <div class="sub"><span class="src" style="background:${SOURCE_COLOR[a.source] || '#ddd'}"></span>${esc(a.source || '')} · ${esc(a.project || '')}</div>
+        <div class="sub"><span class="src" style="background:${SOURCE_COLOR[a.source] || '#ddd'}"></span>${[a.source, modelLabel(a.model), projectLabel(a)].filter(Boolean).map(esc).join(' · ')}</div>
       </div>
       <div class="state" style="background:${STATE_COLOR[st]}">${STATE_LABEL[st] || st}</div>
     </div>
@@ -236,7 +237,7 @@ export class Hud {
       return `<div class="item ${a.kind === 'subagent' ? 'sub' : ''} ${st} ${this.selected === a.id ? 'sel' : ''}" data-id="${esc(a.id)}">
         <span class="em" style="background:${esc(P.fur)}">${SPECIES_EMOJI[P.species] || '🐱'}</span>
         <div class="mid">
-          <div class="l1"><b>${esc(P.name)}</b><i class="dot" style="background:${STATE_COLOR[st]}" title="${st}"></i><span class="proj">${esc(a.project || '')}</span></div>
+          <div class="l1"><b>${esc(P.name)}</b><i class="dot" style="background:${STATE_COLOR[st]}" title="${st}"></i><span class="proj">${esc(projectLabel(a) || modelLabel(a.model))}</span></div>
           <div class="l2"><div class="bar"><i style="width:${pct}%;background:${pct > 80 ? '#ff8a8a' : pct > 60 ? '#ffc46b' : '#8fd6b0'}"></i></div><span class="cost">${fmtCost(a.cost_10m)}</span></div>
         </div></div>`;
     }).join('') || '<div class="empty">No agents running — time for a nap 💤</div>';

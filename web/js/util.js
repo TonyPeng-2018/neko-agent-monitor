@@ -115,6 +115,20 @@ export function normPersona(p, seed = 'neko') {
   };
 }
 
+/** 'claude-opus-5-5[1m]' → 'Opus 5.5 1M', 'claude-haiku-4-5-20251001' → 'Haiku 4.5';
+ *  other vendors' ids are shown as they are. */
+export function modelLabel(m) {
+  let s = String(m || '').trim();
+  const long = /\[1m\]$/i.test(s);
+  s = s.replace(/\[[^\]]*\]$/, '');
+  const c = s.match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i);
+  if (c) s = c[1][0].toUpperCase() + c[1].slice(1) + ' ' + c[2] + (c[3] ? '.' + c[3] : '');
+  return long ? s + ' 1M' : s;
+}
+
+/** Project for display; a session started in $HOME has none ('~'). */
+export const projectLabel = (a) => (a.project && a.project !== '~' ? a.project : '');
+
 export function fmtTokens(n) {
   n = n || 0;
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
